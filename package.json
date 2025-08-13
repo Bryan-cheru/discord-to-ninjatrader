@@ -1,0 +1,31 @@
+{
+  "name": "discord-nt8-copier",
+  "version": "1.0.0",
+  "description": "Local Discord-to-NT8 trade copier that listens to Discord channels and routes trade signals to NinjaTrader 8 accounts",
+  "main": "dist/app.js",
+  "scripts": {
+    "start": "node dist/app.js",
+    "dev": "ts-node src/app.ts",
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test:parser": "ts-node test/signal-parser-test.ts",
+    "test:new-format": "ts-node test/new-format-parser-test.ts",
+    "test:integration": "ts-node test/integration-test.ts"
+  },
+  "keywords": ["discord", "ninjatrader", "trading", "bot", "copier"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1",
+    "ws": "^8.14.2",
+    "axios": "^1.6.2",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.5",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.3",
+    "ts-node": "^10.9.2"
+  }
+}
