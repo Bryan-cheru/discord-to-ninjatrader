@@ -23,7 +23,7 @@ namespace NinjaTrader.NinjaScript.Strategies
     public class DiscordTradeCopier : Strategy
     {
         private TcpListener tcpListener;
-        private System.Windows.Threading.DispatcherTimer pollTimer;
+        private System.Threading.Timer pollTimer;
         private bool isListening = false;
         private Dictionary<string, int> instrumentMap;
         private static int globalRestartCount = 0;
@@ -451,15 +451,12 @@ namespace NinjaTrader.NinjaScript.Strategies
                 if (pollTimer != null)
                 {
                     LogMessage($"🔄 Stopping existing poll timer", true);
-                    pollTimer.Stop();
+                    pollTimer.Dispose();
                     pollTimer = null;
                 }
                 
                 LogMessage($"⏰ Creating poll timer with 100ms interval", true);
-                pollTimer = new System.Windows.Threading.DispatcherTimer();
-                pollTimer.Interval = TimeSpan.FromMilliseconds(100);
-                pollTimer.Tick += PollForCommands;
-                pollTimer.Start();
+                pollTimer = new System.Threading.Timer(PollForCommands, null, 0, 100);
                 LogMessage($"✅ Poll timer started successfully", true);
 
                 LogMessage($"✅ Discord Trade Copier READY! Listening on port {TcpPort}", true);
@@ -503,7 +500,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                     globalListenerActive = false; // Reset global state
                 }
                 
-                pollTimer?.Stop();
+                pollTimer?.Dispose();
                 pollTimer = null;
 
                 if (tcpListener != null)
@@ -521,7 +518,7 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private static int pollCount = 0; // Move to class level
         
-        private void PollForCommands(object sender, EventArgs e)
+        private void PollForCommands(object state)
         {
             if (!isListening || tcpListener == null)
                 return;
