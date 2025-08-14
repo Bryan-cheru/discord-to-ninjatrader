@@ -25,9 +25,14 @@ namespace NinjaTrader.NinjaScript.Strategies
         private TcpListener tcpListener;
         private System.Windows.Threading.DispatcherTimer pollTimer;
         private bool isListening = false;
-        private Dictionary<string, int> instrumentMap = new Dictionary<string, int>();
-        private int restartCount = 0;
-        private DateTime lastRestartTime = DateTime.MinValue;
+        private Dictionary<string, int> instrumentMap;
+        private static int globalRestartCount = 0;
+        private static DateTime globalLastRestartTime = DateTime.MinValue;
+        private static bool globalListenerActive = false; // Track if any instance has an active listener
+        private static DiscordTradeCopier activeInstance = null; // Singleton pattern
+        
+        // Instance-specific initialization flag
+        private bool isInitialized = false;
 
         #region Properties
         [NinjaScriptProperty]
@@ -38,7 +43,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         [NinjaScriptProperty]
         [Range(1024, 65535)]
         [Display(Name = "TCP Port", Order = 1, GroupName = "Connection")]
-        public int TcpPort { get; set; } = 36973;
+        public int TcpPort { get; set; } = 36971; // Match your NT8 configuration
 
         [NinjaScriptProperty]
         [Range(1, 100)]
@@ -54,88 +59,148 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             try
             {
+                Print($"🔍 OnStateChange called with State: {State}");
+                
                 if (State == State.SetDefaults)
                 {
-                    // Check for excessive restarts with more aggressive protection
-                    if (DateTime.Now - lastRestartTime < TimeSpan.FromMinutes(2)) // Increased from 1 minute
+                    // Enhanced restart protection with singleton check
+                    if (activeInstance != null && globalListenerActive)
                     {
-                        restartCount++;
-                        if (restartCount > 3) // Reduced from 5 to be more conservative
+                        Print($"⚠️ Active strategy instance already running with listener. Blocking additional instance.");
+                        return; // Prevent this instance from continuing
+                    }
+                    
+                    // Always initialize instance variables to prevent null reference exceptions
+                    instrumentMap = new Dictionary<string, int>();
+                    isInitialized = true;
+                    
+                    Print($"🔧 Entering SetDefaults state at {DateTime.Now}");
+                    
+                    // Simplified restart protection - only track excessive restarts
+                    if (DateTime.Now - globalLastRestartTime < TimeSpan.FromSeconds(60)) // Increased to 60 seconds
+                    {
+                        globalRestartCount++;
+                        Print($"⚠️ Global restart #{globalRestartCount} within 60 seconds");
+                        if (globalRestartCount > 15) // Increased threshold significantly  
                         {
-                            LogMessage($"❌ Too many restarts ({restartCount}) in short time. Strategy disabled to prevent infinite loop.", true);
-                            LogMessage($"❌ Please check logs for errors, restart NinjaTrader, and try again.", true);
+                            Print($"❌ Too many global restarts ({globalRestartCount}) in 60 seconds. Strategy disabled.");
                             return;
                         }
                     }
                     else
                     {
-                        restartCount = 0; // Reset counter after 2 minutes
+                        Print($"✅ Global restart counter reset - last restart was over 60 seconds ago");
+                        globalRestartCount = 0; // Reset counter after 60 seconds
                     }
-                    lastRestartTime = DateTime.Now;
+                    globalLastRestartTime = DateTime.Now;
+
+                    Print($"🔧 DiscordTradeCopier initializing (global restart #{globalRestartCount})");
 
                     Description = "Discord Trade Copier - Multi-Instrument";
                     Name = "DiscordTradeCopier";
 
-                    // Default instruments
-                    TradableInstruments = "NQ,ES,MNQ,MES";
+                    // Default instruments - start with just NQ for testing
+                    TradableInstruments = "NQ";
 
-                    // Strategy settings
-                    Calculate = Calculate.OnEachTick;
-                    EntriesPerDirection = 100; // Allow multiple entries per direction for different instruments
-                    EntryHandling = EntryHandling.AllEntries;
-                    IsExitOnSessionCloseStrategy = false;
-                    IsFillLimitOnTouch = false;
-                    MaximumBarsLookBack = MaximumBarsLookBack.TwoHundredFiftySix;
-                    OrderFillResolution = OrderFillResolution.Standard;
-                    Slippage = 0;
-                    StartBehavior = StartBehavior.WaitUntilFlat;
-                    TimeInForce = TimeInForce.Gtc;
-                    TraceOrders = false;
-                    RealtimeErrorHandling = RealtimeErrorHandling.StopCancelClose;
-                    StopTargetHandling = StopTargetHandling.PerEntryExecution;
-                    BarsRequiredToTrade = 0;
+                    try
+                    {
+                        Print($"🔧 Setting strategy properties...");
+                        
+                        // Strategy settings with error handling
+                        Calculate = Calculate.OnBarClose; // Changed from OnEachTick to reduce processing
+                        EntriesPerDirection = 100;
+                        EntryHandling = EntryHandling.AllEntries;
+                        IsExitOnSessionCloseStrategy = false;
+                        IsFillLimitOnTouch = false;
+                        MaximumBarsLookBack = MaximumBarsLookBack.TwoHundredFiftySix;
+                        OrderFillResolution = OrderFillResolution.Standard;
+                        Slippage = 0;
+                        StartBehavior = StartBehavior.ImmediatelySubmit; 
+                        TimeInForce = TimeInForce.Gtc;
+                        TraceOrders = false;
+                        RealtimeErrorHandling = RealtimeErrorHandling.IgnoreAllErrors;
+                        StopTargetHandling = StopTargetHandling.PerEntryExecution;
+                        BarsRequiredToTrade = 1; // Increased from 0 to help stability
 
-                    LogMessage($"🔧 DiscordTradeCopier initializing (restart #{restartCount})", true);
+                        Print($"✅ SetDefaults completed successfully");
+                    }
+                    catch (Exception setupEx)
+                    {
+                        Print($"❌ CRITICAL ERROR in SetDefaults setup: {setupEx.Message}");
+                        Print($"❌ SetDefaults error stack trace: {setupEx.StackTrace}");
+                        // Don't throw - let it continue
+                    }
                 }
                 else if (State == State.Configure)
                 {
-                    LogMessage($"⚙️ DiscordTradeCopier configuring", true);
-
-                    // Add the primary instrument to the map
-                    instrumentMap[Instrument.MasterInstrument.Name.ToUpper()] = 0;
-                    LogMessage($"📈 Primary instrument: {Instrument.MasterInstrument.Name} at index 0", true);
-
-                    // Add additional data series for other instruments
-                    if (!string.IsNullOrEmpty(TradableInstruments))
+                    try
                     {
-                        string[] symbols = TradableInstruments.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
-                        int addedCount = 0;
+                        Print($"⚙️ DiscordTradeCopier configuring - START");
                         
-                        foreach (string symbol in symbols)
+                        // Safety check - ensure instrumentMap is initialized
+                        if (instrumentMap == null)
                         {
-                            string upperSymbol = symbol.Trim().ToUpper();
-                            if (!instrumentMap.ContainsKey(upperSymbol) && upperSymbol != Instrument.MasterInstrument.Name.ToUpper())
-                            {
-                                try
-                                {
-                                    // Try to add data series with error handling
-                                    AddDataSeries(upperSymbol, BarsPeriodType.Minute, 1);
-                                    addedCount++;
-                                    LogMessage($"📈 Adding data series for: {upperSymbol}", true);
-                                }
-                                catch (Exception ex)
-                                {
-                                    LogMessage($"⚠️ Failed to add data series for {upperSymbol}: {ex.Message}", true);
-                                    // Continue with other symbols instead of failing completely
-                                }
-                            }
-                            else if (upperSymbol == Instrument.MasterInstrument.Name.ToUpper())
-                            {
-                                LogMessage($"📈 {upperSymbol} is the primary instrument (already loaded)", true);
-                            }
+                            Print($"⚠️ instrumentMap was null in Configure - reinitializing");
+                            instrumentMap = new Dictionary<string, int>();
                         }
                         
-                        LogMessage($"📊 Added {addedCount} additional data series", true);
+                        // Validate we have an instrument before proceeding
+                        if (Instrument == null || Instrument.MasterInstrument == null)
+                        {
+                            Print($"❌ CRITICAL: Instrument is null in Configure state!");
+                            throw new Exception("Instrument is null - cannot configure strategy");
+                        }
+
+                        Print($"📊 Primary instrument available: {Instrument.MasterInstrument.Name}");
+
+                        // Add the primary instrument to the map
+                        instrumentMap[Instrument.MasterInstrument.Name.ToUpper()] = 0;
+                        Print($"📈 Primary instrument: {Instrument.MasterInstrument.Name} at index 0");
+
+                        // Add additional data series for other instruments (simplified)
+                        if (!string.IsNullOrEmpty(TradableInstruments))
+                        {
+                            string[] symbols = TradableInstruments.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                            int addedCount = 0;
+                            
+                            foreach (string symbol in symbols)
+                            {
+                                string upperSymbol = symbol.Trim().ToUpper();
+                                if (!instrumentMap.ContainsKey(upperSymbol) && upperSymbol != Instrument.MasterInstrument.Name.ToUpper())
+                                {
+                                    try
+                                    {
+                                        Print($"📈 Attempting to add data series for: {upperSymbol}");
+                                        // Try to add data series with error handling
+                                        AddDataSeries(upperSymbol, BarsPeriodType.Minute, 1);
+                                        addedCount++;
+                                        Print($"✅ Successfully added data series for: {upperSymbol}");
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Print($"⚠️ Failed to add data series for {upperSymbol}: {ex.Message}");
+                                        Print($"⚠️ Stack trace: {ex.StackTrace}");
+                                        // Continue with other symbols instead of failing completely
+                                    }
+                                }
+                                else if (upperSymbol == Instrument.MasterInstrument.Name.ToUpper())
+                                {
+                                    Print($"📈 {upperSymbol} is the primary instrument (already loaded)");
+                                }
+                            }
+                            
+                            Print($"📊 Added {addedCount} additional data series");
+                        }
+                        
+                        Print($"✅ Configure state completed successfully");
+                    }
+                    catch (Exception configEx)
+                    {
+                        Print($"❌ CRITICAL ERROR in Configure: {configEx.Message}");
+                        Print($"❌ Configure Stack trace: {configEx.StackTrace}");
+                        
+                        // Don't throw exception - try to continue
+                        Print($"⚠️ Continuing with primary instrument only due to Configure error");
                     }
                 }
                 else if (State == State.DataLoaded)
@@ -143,6 +208,13 @@ namespace NinjaTrader.NinjaScript.Strategies
                     try
                     {
                         LogMessage($"📊 DataLoaded phase started. BarsArray.Length: {BarsArray.Length}", true);
+                        
+                        // Safety check - ensure instrumentMap is initialized
+                        if (instrumentMap == null)
+                        {
+                            LogMessage($"⚠️ instrumentMap was null in DataLoaded - reinitializing", true);
+                            instrumentMap = new Dictionary<string, int>();
+                        }
                         
                         // Clear and rebuild instrument map to avoid duplicates
                         instrumentMap.Clear();
@@ -181,83 +253,151 @@ namespace NinjaTrader.NinjaScript.Strategies
                 {
                     try
                     {
-                        LogMessage($"🚀 DiscordTradeCopier entering Active state on account: {Account.DisplayName}", true);
-                        LogMessage($"📊 Available instruments: {instrumentMap.Count}", true);
+                        Print($"🚀 DiscordTradeCopier entering Active state on account: {Account?.DisplayName ?? "Unknown"}");
+                        Print($"📊 Available instruments: {instrumentMap?.Count ?? 0}");
+                        Print($"📊 Current State: {State}");
+                        Print($"📊 BarsArray Length: {BarsArray?.Length ?? 0}");
                         
                         // Additional validation before starting listener
                         if (Account == null)
                         {
-                            LogMessage($"❌ CRITICAL: Account is null!", true);
+                            Print($"❌ CRITICAL: Account is null! Cannot proceed to Active state.");
                             return;
                         }
                         
                         if (BarsArray == null || BarsArray.Length == 0)
                         {
-                            LogMessage($"❌ CRITICAL: BarsArray is null or empty!", true);
+                            Print($"❌ CRITICAL: BarsArray is null or empty! BarsArray length: {BarsArray?.Length ?? 0}");
+                            return;
+                        }
+                        
+                        if (instrumentMap == null)
+                        {
+                            Print($"❌ CRITICAL: instrumentMap is null!");
                             return;
                         }
                         
                         // Validate that we have instruments mapped
                         if (instrumentMap.Count == 0)
                         {
-                            LogMessage($"❌ CRITICAL: No instruments mapped! Check TradableInstruments parameter.", true);
+                            Print($"❌ CRITICAL: No instruments mapped! Check TradableInstruments parameter.");
+                            Print($"❌ TradableInstruments setting: '{TradableInstruments}'");
                             return;
                         }
                         
-                        // Check if account is connected
+                        // Check if account is connected (warning only, don't fail)
                         if (Account.Connection.Status != ConnectionStatus.Connected)
                         {
-                            LogMessage($"⚠️ WARNING: Account connection status is {Account.Connection.Status}", true);
-                            // Don't return here, as strategy might still work
+                            Print($"⚠️ WARNING: Account connection status is {Account.Connection.Status}");
                         }
                         
-                        // Add a small delay before starting listener to ensure everything is ready
-                        var startTimer = new System.Windows.Threading.DispatcherTimer();
-                        startTimer.Interval = TimeSpan.FromSeconds(2);
-                        startTimer.Tick += (s, e) => {
-                            startTimer.Stop();
-                            try
-                            {
-                                StartListener();
-                                LogMessage($"✅ DiscordTradeCopier fully started and ready!", true);
-                            }
-                            catch (Exception startEx)
-                            {
-                                LogMessage($"❌ Error in delayed StartListener: {startEx.Message}", true);
-                            }
-                        };
-                        startTimer.Start();
+                        Print($"🔧 About to start TCP listener on port {TcpPort}...");
+                        
+                        // Start listener immediately instead of using timer
+                        try
+                        {
+                            StartListener();
+                            Print($"✅ DiscordTradeCopier fully started and ready!");
+                        }
+                        catch (Exception startEx)
+                        {
+                            Print($"❌ Error starting listener: {startEx.Message}");
+                            Print($"❌ StartListener error details: {startEx.StackTrace}");
+                        }
                     }
                     catch (Exception ex)
                     {
-                        LogMessage($"❌ CRITICAL ERROR in State.Active: {ex.Message}", true);
-                        LogMessage($"❌ Active Stack trace: {ex.StackTrace}", true);
-                        return; // Don't proceed
+                        Print($"❌ CRITICAL ERROR in State.Active: {ex.Message}");
+                        Print($"❌ Active Stack trace: {ex.StackTrace}");
+                        // Don't throw - let it continue but log the error
                     }
                 }
                 else if (State == State.Terminated)
                 {
-                    LogMessage($"🛑 DiscordTradeCopier terminating - cleaning up resources", true);
+                    Print($"🛑 DiscordTradeCopier terminating - cleaning up resources");
                     
                     try
                     {
                         StopListener();
                         
-                        // Clear instrument map
-                        instrumentMap.Clear();
+                        // Clear singleton reference if this was the active instance
+                        if (activeInstance == this)
+                        {
+                            activeInstance = null;
+                            Print($"🔄 Active instance cleared for future restarts");
+                        }
                         
-                        LogMessage($"✅ Strategy cleanup completed", true);
+                        // Clear instrument map
+                        if (instrumentMap != null)
+                        {
+                            instrumentMap.Clear();
+                        }
+                        
+                        Print($"✅ Strategy cleanup completed");
                     }
                     catch (Exception ex)
                     {
-                        LogMessage($"❌ Error during termination cleanup: {ex.Message}", true);
+                        Print($"❌ Error during termination cleanup: {ex.Message}");
                     }
+                }
+                else if (State == State.Historical)
+                {
+                    Print($"📚 Strategy entered Historical state");
+                }
+                else if (State == State.Transition)
+                {
+                    Print($"🔄 Strategy in Transition state");
+                }
+                else if (State == State.Realtime)
+                {
+                    Print($"🕐 Strategy entered Realtime state");
+                    
+                    // Enhanced singleton check - only allow one active instance
+                    if (activeInstance != null && activeInstance != this && globalListenerActive)
+                    {
+                        Print($"⚠️ Another strategy instance is already active. This instance will remain passive.");
+                        return;
+                    }
+                    
+                    // This might be the state we need to handle!
+                    if (instrumentMap != null && instrumentMap.Count > 0 && !isListening)
+                    {
+                        Print($"🚀 Attempting to start listener from Realtime state...");
+                        try
+                        {
+                            // Set this as the active instance before starting listener
+                            activeInstance = this;
+                            StartListener();
+                            Print($"✅ DiscordTradeCopier started from Realtime state!");
+                        }
+                        catch (Exception ex)
+                        {
+                            Print($"❌ Error starting listener from Realtime: {ex.Message}");
+                            activeInstance = null; // Reset if failed to start
+                        }
+                    }
+                }
+                else
+                {
+                    Print($"🔍 Unhandled state: {State}");
                 }
             }
             catch (Exception ex)
             {
-                LogMessage($"❌ FATAL ERROR in OnStateChange: {ex.Message}", true);
-                Print($"❌ FATAL ERROR in OnStateChange: {ex.Message}");
+                // Safe error logging that won't cause additional failures
+                try
+                {
+                    Print($"❌ FATAL ERROR in OnStateChange [{State}]: {ex.Message}");
+                    Print($"❌ FATAL ERROR Stack Trace: {ex.StackTrace}");
+                }
+                catch
+                {
+                    // If even Print fails, try basic console output
+                    System.Console.WriteLine($"CRITICAL ERROR in OnStateChange: {ex.Message}");
+                }
+                
+                // Don't re-throw the exception as it causes NT8 to restart the strategy
+                // Instead, let it gracefully fail and stay in a known state
             }
         }
 
@@ -266,12 +406,28 @@ namespace NinjaTrader.NinjaScript.Strategies
             try
             {
                 LogMessage($"🔧 StartListener called. Current listening status: {isListening}", true);
+                LogMessage($"🔧 Current TCP Port: {TcpPort}", true);
+                LogMessage($"🔧 Global listener active: {globalListenerActive}", true);
+                
+                // Prevent multiple instances from starting listeners simultaneously
+                if (globalListenerActive)
+                {
+                    LogMessage($"⚠️ Another strategy instance already has an active listener. Skipping.", true);
+                    return;
+                }
                 
                 // Stop any existing listener first
                 if (tcpListener != null)
                 {
                     LogMessage($"🔄 Stopping existing TCP listener", true);
-                    tcpListener.Stop();
+                    try
+                    {
+                        tcpListener.Stop();
+                    }
+                    catch (Exception stopEx)
+                    {
+                        LogMessage($"⚠️ Error stopping existing listener: {stopEx.Message}", true);
+                    }
                     tcpListener = null;
                 }
 
@@ -284,29 +440,36 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                 LogMessage($"🔌 Creating TCP listener on port {TcpPort}", true);
                 tcpListener = new TcpListener(IPAddress.Any, TcpPort);
+                
+                LogMessage($"🔌 Starting TCP listener...", true);
                 tcpListener.Start();
                 isListening = true;
+                globalListenerActive = true; // Mark global state
+                LogMessage($"✅ TCP listener started successfully on port {TcpPort}", true);
 
                 // Create and start the polling timer
                 if (pollTimer != null)
                 {
+                    LogMessage($"🔄 Stopping existing poll timer", true);
                     pollTimer.Stop();
                     pollTimer = null;
                 }
                 
+                LogMessage($"⏰ Creating poll timer with 100ms interval", true);
                 pollTimer = new System.Windows.Threading.DispatcherTimer();
                 pollTimer.Interval = TimeSpan.FromMilliseconds(100);
                 pollTimer.Tick += PollForCommands;
                 pollTimer.Start();
+                LogMessage($"✅ Poll timer started successfully", true);
 
                 LogMessage($"✅ Discord Trade Copier READY! Listening on port {TcpPort}", true);
                 LogMessage($"📈 Trading Instruments: {string.Join(", ", instrumentMap.Keys)}", true);
                 LogMessage($"💬 Send commands like: BUY 1 NQ, SELL 2 ES, CLOSE MNQ, etc.", true);
-                LogMessage($"🏦 Active Account: {Account.DisplayName}", true);
+                LogMessage($"🏦 Active Account: {Account?.DisplayName ?? "Unknown"}", true);
             }
             catch (Exception ex)
             {
-                LogMessage($"❌ Error starting TCP listener on port {TcpPort}: {ex.Message}", true);
+                LogMessage($"❌ CRITICAL ERROR starting TCP listener on port {TcpPort}: {ex.Message}", true);
                 LogMessage($"❌ StartListener Stack trace: {ex.StackTrace}", true);
                 
                 // Check if port is in use
@@ -314,25 +477,17 @@ namespace NinjaTrader.NinjaScript.Strategies
                 {
                     LogMessage($"⚠️ Port {TcpPort} is already in use. Try a different port or restart NinjaTrader.", true);
                 }
+                else if (ex.Message.Contains("access denied") || ex.Message.Contains("permission"))
+                {
+                    LogMessage($"⚠️ Access denied for port {TcpPort}. Try running NinjaTrader as administrator.", true);
+                }
                 
                 isListening = false;
+                globalListenerActive = false; // Reset global state on failure
                 
-                // Retry after 15 seconds with better error handling
-                var retryTimer = new System.Windows.Threading.DispatcherTimer();
-                retryTimer.Interval = TimeSpan.FromSeconds(15);
-                retryTimer.Tick += (s, e) => {
-                    retryTimer.Stop();
-                    try
-                    {
-                        LogMessage($"🔄 Retrying TCP listener on port {TcpPort}...", true);
-                        StartListener();
-                    }
-                    catch (Exception retryEx)
-                    {
-                        LogMessage($"❌ Retry failed: {retryEx.Message}", true);
-                    }
-                };
-                retryTimer.Start();
+                // Don't retry automatically - let user fix the issue first
+                LogMessage($"❌ TCP listener failed to start. Strategy will not process Discord commands.", true);
+                throw; // Re-throw to make the error visible in NT8
             }
         }
 
@@ -341,6 +496,13 @@ namespace NinjaTrader.NinjaScript.Strategies
             try
             {
                 isListening = false;
+                
+                // Only reset global state if this is the active instance
+                if (activeInstance == this)
+                {
+                    globalListenerActive = false; // Reset global state
+                }
+                
                 pollTimer?.Stop();
                 pollTimer = null;
 
@@ -357,6 +519,8 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
         }
 
+        private static int pollCount = 0; // Move to class level
+        
         private void PollForCommands(object sender, EventArgs e)
         {
             if (!isListening || tcpListener == null)
@@ -364,9 +528,16 @@ namespace NinjaTrader.NinjaScript.Strategies
 
             try
             {
+                // Add periodic heartbeat to show the listener is active
+                pollCount++;
+                if (pollCount % 100 == 0) // Every 10 seconds (100ms * 100)
+                {
+                    LogMessage($"💓 TCP Listener heartbeat - Port {TcpPort} active, Poll #{pollCount}", true);
+                }
+
                 if (tcpListener.Pending())
                 {
-                    LogMessage("📞 Incoming Discord command...");
+                    LogMessage("📞 Incoming Discord command...", true);
 
                     using (TcpClient client = tcpListener.AcceptTcpClient())
                     using (NetworkStream stream = client.GetStream())
@@ -377,20 +548,26 @@ namespace NinjaTrader.NinjaScript.Strategies
                         if (bytesRead > 0)
                         {
                             string command = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
-                            LogMessage($"📨 Command: '{command}'");
+                            LogMessage($"📨 Command received: '{command}'", true);
 
                             ProcessDiscordCommand(command);
 
                             // Send response back to Discord bot
                             byte[] response = Encoding.UTF8.GetBytes("✅ Command received\n");
                             stream.Write(response, 0, response.Length);
+                            LogMessage($"📤 Response sent back to Discord bot", true);
+                        }
+                        else
+                        {
+                            LogMessage($"⚠️ No data received from Discord bot", true);
                         }
                     }
                 }
             }
             catch (Exception ex)
             {
-                LogMessage($"❌ Error receiving command: {ex.Message}");
+                LogMessage($"❌ Error receiving command: {ex.Message}", true);
+                LogMessage($"❌ PollForCommands stack trace: {ex.StackTrace}", true);
             }
         }
 
@@ -398,9 +575,11 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             try
             {
+                LogMessage($"🎯 ProcessDiscordCommand started with: '{command}'", true);
+                
                 if (string.IsNullOrEmpty(command))
                 {
-                    LogMessage("❌ Empty command received");
+                    LogMessage("❌ Empty command received", true);
                     return;
                 }
 
@@ -408,71 +587,98 @@ namespace NinjaTrader.NinjaScript.Strategies
                 string upperCommand = command.ToUpper().Replace(",", "");
                 string[] parts = upperCommand.Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
 
+                LogMessage($"🔍 Command parts: [{string.Join(", ", parts)}]", true);
+
                 if (parts.Length == 0)
                 {
-                    LogMessage("❌ Invalid command format");
+                    LogMessage("❌ Invalid command format - no parts found", true);
                     return;
                 }
 
-                LogMessage($"🎯 Processing: {upperCommand} on account: {Account.DisplayName}");
+                LogMessage($"🎯 Processing: {upperCommand} on account: {Account?.DisplayName ?? "Unknown"}", true);
 
                 // Handle different command formats
                 if (upperCommand.StartsWith("BUY") && upperCommand.Contains("STOP LIMIT @"))
                 {
+                    LogMessage($"🔀 Routing to HandleBuyStopLimitCommand", true);
                     HandleBuyStopLimitCommand(parts);
                 }
                 else if (upperCommand.StartsWith("SELL") && upperCommand.Contains("STOP LIMIT @"))
                 {
+                    LogMessage($"🔀 Routing to HandleSellStopLimitCommand", true);
                     HandleSellStopLimitCommand(parts);
                 }
                 else if (upperCommand.StartsWith("BUY"))
                 {
+                    LogMessage($"🔀 Routing to HandleBuyMarketCommand", true);
                     HandleBuyMarketCommand(parts);
                 }
                 else if (upperCommand.StartsWith("SELL"))
                 {
+                    LogMessage($"🔀 Routing to HandleSellMarketCommand", true);
                     HandleSellMarketCommand(parts);
                 }
                 else if (upperCommand.StartsWith("CLOSE POSITION"))
                 {
+                    LogMessage($"🔀 Routing to HandleClosePositionCommand", true);
                     HandleClosePositionCommand(parts);
                 }
                 else if (upperCommand.StartsWith("CLOSE"))
                 {
+                    LogMessage($"🔀 Routing to HandleCloseSymbolCommand", true);
                     HandleCloseSymbolCommand(parts);
                 }
                 else if (upperCommand.StartsWith("MOVE SL TO"))
                 {
+                    LogMessage($"🔀 Routing to HandleMoveSLCommand", true);
                     HandleMoveSLCommand(parts);
                 }
                 else if (upperCommand.StartsWith("MOVE TP TO"))
                 {
+                    LogMessage($"🔀 Routing to HandleMoveTPCommand", true);
                     HandleMoveTPCommand(parts);
                 }
                 else
                 {
                     // Legacy commands might not work as expected with multi-instrument.
                     // It's better to guide users to the new format.
-                    LogMessage($"⚠️ Legacy command '{parts[0]}' used. Please use new format for multi-instrument trading.");
+                    LogMessage($"🔀 Routing to HandleLegacyCommand for '{parts[0]}'", true);
+                    LogMessage($"⚠️ Legacy command '{parts[0]}' used. Please use new format for multi-instrument trading.", true);
                     HandleLegacyCommand(parts);
                 }
+                
+                LogMessage($"✅ ProcessDiscordCommand completed for: '{command}'", true);
             }
             catch (Exception ex)
             {
-                LogMessage($"❌ Error processing command: {ex.Message}");
+                LogMessage($"❌ Error processing command '{command}': {ex.Message}", true);
+                LogMessage($"❌ ProcessDiscordCommand stack trace: {ex.StackTrace}", true);
             }
         }
 
         private int GetInstrumentIndex(string symbol)
         {
-            string upperSymbol = symbol.ToUpper();
-            if (instrumentMap.ContainsKey(upperSymbol))
+            try
             {
-                return instrumentMap[upperSymbol];
-            }
+                string upperSymbol = symbol.ToUpper();
+                LogMessage($"🔍 GetInstrumentIndex - Looking for symbol: '{upperSymbol}'", true);
+                LogMessage($"🔍 Available instruments: [{string.Join(", ", instrumentMap.Keys)}]", true);
+                
+                if (instrumentMap.ContainsKey(upperSymbol))
+                {
+                    int index = instrumentMap[upperSymbol];
+                    LogMessage($"✅ Found {upperSymbol} at index {index}", true);
+                    return index;
+                }
 
-            LogMessage($"❌ Instrument '{symbol}' not found in tradable list. Add it to strategy parameters.", true);
-            return -1; // Indicates instrument not found
+                LogMessage($"❌ Instrument '{symbol}' not found in tradable list. Add it to strategy parameters.", true);
+                return -1; // Indicates instrument not found
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error in GetInstrumentIndex: {ex.Message}", true);
+                return -1;
+            }
         }
 
         private void HandleBuyCommand(string[] parts)
@@ -706,24 +912,44 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             try
             {
+                LogMessage($"🟢 HandleBuyMarketCommand started with parts: [{string.Join(", ", parts)}]", true);
+                
                 // Format: BUY # SYMBOL
                 if (parts.Length >= 3 && int.TryParse(parts[1], out int quantity))
                 {
                     string symbol = parts[2];
+                    LogMessage($"🔍 Parsed - Quantity: {quantity}, Symbol: {symbol}", true);
+                    
                     int barsIndex = GetInstrumentIndex(symbol);
-                    if (barsIndex == -1) return;
+                    LogMessage($"🔍 Instrument index for {symbol}: {barsIndex}", true);
+                    
+                    if (barsIndex == -1) 
+                    {
+                        LogMessage($"❌ Instrument {symbol} not found, aborting trade", true);
+                        return;
+                    }
 
-                    LogMessage($"🟢 MARKET BUY: {quantity} {symbol}");
+                    LogMessage($"🟢 MARKET BUY: {quantity} {symbol}", true);
+                    LogMessage($"🔧 Calling EnterLong with barsIndex: {barsIndex}, quantity: {quantity}", true);
+                    
+                    // Execute the trade
                     EnterLong(barsIndex, quantity, $"DiscordBuyMarket_{symbol}_{DateTime.Now.Ticks}");
+                    
+                    LogMessage($"✅ EnterLong call completed for {quantity} {symbol}", true);
                 }
                 else
                 {
-                    LogMessage($"❌ Invalid BUY format. Use: BUY # SYMBOL");
+                    LogMessage($"❌ Invalid BUY format. Parts.Length: {parts.Length}. Use: BUY # SYMBOL", true);
+                    if (parts.Length >= 2)
+                    {
+                        LogMessage($"❌ Failed to parse quantity '{parts[1]}' as integer", true);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                LogMessage($"❌ Error in BUY command: {ex.Message}");
+                LogMessage($"❌ Error in BUY command: {ex.Message}", true);
+                LogMessage($"❌ HandleBuyMarketCommand stack trace: {ex.StackTrace}", true);
             }
         }
 
@@ -936,9 +1162,28 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private void LogMessage(string message, bool forceLog = false)
         {
-            if (EnableDebugLogging || forceLog)
+            try
             {
-                Print($"{DateTime.Now:HH:mm:ss} - {message}");
+                if (EnableDebugLogging || forceLog)
+                {
+                    // Log in all states except SetDefaults (to avoid early state issues)
+                    if (State != State.SetDefaults)
+                    {
+                        Print($"{DateTime.Now:HH:mm:ss} - {message}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Fallback - use basic Print if LogMessage fails
+                try
+                {
+                    Print($"LogMessage ERROR: {ex.Message} - Original: {message}");
+                }
+                catch
+                {
+                    // If even Print fails, just ignore to prevent cascade failures
+                }
             }
         }
 
@@ -949,11 +1194,14 @@ namespace NinjaTrader.NinjaScript.Strategies
             if (CurrentBars == null || CurrentBars.Length == 0) return;
             if (CurrentBars[0] < 1) return;
             if (BarsInProgress < 0 || BarsInProgress >= BarsArray.Length) return;
+            
+            // Additional safety check for instrumentMap
+            if (instrumentMap == null) return;
 
             try
             {
-                // Heartbeat every 500 bars on the primary instrument ONLY
-                if (BarsInProgress == 0 && CurrentBar % 500 == 0 && CurrentBar > 0)
+                // Reduced heartbeat frequency to prevent excessive logging
+                if (BarsInProgress == 0 && CurrentBar % 2000 == 0 && CurrentBar > 0) // Changed from 500 to 2000
                 {
                     LogMessage($"💓 Heartbeat - Bar {CurrentBar}, Port: {(isListening ? "Active" : "Inactive")}, Instruments: {instrumentMap.Count}");
                 }
@@ -970,7 +1218,30 @@ namespace NinjaTrader.NinjaScript.Strategies
             // Log position updates
             if (position.Instrument != null)
             {
-                LogMessage($"📊 Position [{position.Instrument.MasterInstrument.Name}]: {marketPosition} {Math.Abs(quantity)} @ {averagePrice:F2}");
+                LogMessage($"📊 Position [{position.Instrument.MasterInstrument.Name}]: {marketPosition} {Math.Abs(quantity)} @ {averagePrice:F2}", true);
+            }
+        }
+
+        protected override void OnOrderUpdate(Order order, double limitPrice, double stopPrice, int quantity, int filled, double averageFillPrice, OrderState orderState, DateTime time, ErrorCode error, string nativeError)
+        {
+            // Log all order updates to track what's happening
+            if (order != null)
+            {
+                LogMessage($"🔔 Order Update - Signal: {order.Name}, State: {orderState}, Qty: {quantity}, Filled: {filled}, Price: {averageFillPrice:F2}, Error: {error}", true);
+                
+                if (error != ErrorCode.NoError)
+                {
+                    LogMessage($"❌ Order Error - {error}: {nativeError}", true);
+                }
+            }
+        }
+
+        protected override void OnExecutionUpdate(Execution execution, string executionId, double price, int quantity, MarketPosition marketPosition, string orderId, DateTime time)
+        {
+            // Log executions
+            if (execution != null && execution.Order != null)
+            {
+                LogMessage($"✅ Execution - Signal: {execution.Order.Name}, Qty: {quantity}, Price: {price:F2}, Position: {marketPosition}", true);
             }
         }
     }

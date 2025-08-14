@@ -9,9 +9,9 @@ export class MessageHandler {
   private tradeExecutor: NT8TradeExecutor;
   private watchedChannels: Set<string>;
 
-  constructor() {
+  constructor(tradeExecutor: NT8TradeExecutor) {
     this.signalParser = new SignalParser();
-    this.tradeExecutor = new NT8TradeExecutor();
+    this.tradeExecutor = tradeExecutor; // Use the shared, initialized executor
     this.watchedChannels = new Set([
       process.env.PROP_CHANNEL_ID!,
       process.env.LIVE_CHANNEL_ID!,
