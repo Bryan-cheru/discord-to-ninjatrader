@@ -501,7 +501,10 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                 LogMessage($"✅ Discord Trade Copier READY! Listening on port {TcpPort}", true);
                 LogMessage($"📈 Trading Instruments: {string.Join(", ", instrumentMap.Keys)}", true);
-                LogMessage($"💬 Send commands like: BUY 1 NQ, SELL 2 ES, CLOSE MNQ, etc.", true);
+                LogMessage($"💬 Market Orders: BUY/SELL # SYMBOL", true);
+                LogMessage($"💬 Limit Orders: BUY/SELL # SYMBOL LIMIT @ PRICE", true);
+                LogMessage($"💬 Stop Limit Orders: BUY/SELL # SYMBOL STOP LIMIT @ PRICE", true);
+                LogMessage($"💬 Close Orders: CLOSE SYMBOL, CLOSE POSITION", true);
                 LogMessage($"🏦 Active Account: {Account?.DisplayName ?? "Unknown"}", true);
             }
             catch (Exception ex)
@@ -644,6 +647,16 @@ namespace NinjaTrader.NinjaScript.Strategies
                 {
                     LogMessage($"🔀 Routing to HandleSellStopLimitCommand", true);
                     HandleSellStopLimitCommand(parts);
+                }
+                else if (upperCommand.StartsWith("BUY") && upperCommand.Contains("LIMIT @"))
+                {
+                    LogMessage($"🔀 Routing to HandleBuyLimitCommand", true);
+                    HandleBuyLimitCommand(parts);
+                }
+                else if (upperCommand.StartsWith("SELL") && upperCommand.Contains("LIMIT @"))
+                {
+                    LogMessage($"🔀 Routing to HandleSellLimitCommand", true);
+                    HandleSellLimitCommand(parts);
                 }
                 else if (upperCommand.StartsWith("BUY"))
                 {
@@ -986,6 +999,118 @@ namespace NinjaTrader.NinjaScript.Strategies
             catch (Exception ex)
             {
                 LogMessage($"❌ Error in SELL STOP LIMIT command: {ex.Message}");
+            }
+        }
+
+        private void HandleBuyLimitCommand(string[] parts)
+        {
+            try
+            {
+                LogMessage($"🟢 HandleBuyLimitCommand started with parts: [{string.Join(", ", parts)}]", true);
+                
+                // Format: BUY # SYMBOL LIMIT @ ####
+                if (parts.Length >= 5 && int.TryParse(parts[1], out int quantity) && double.TryParse(parts[4], out double limitPrice))
+                {
+                    string symbol = parts[2];
+                    LogMessage($"🔍 Parsed - Quantity: {quantity}, Symbol: {symbol}, Limit Price: {limitPrice}", true);
+                    
+                    int barsIndex = GetInstrumentIndex(symbol);
+                    LogMessage($"🔍 Instrument index for {symbol}: {barsIndex}", true);
+                    
+                    if (barsIndex == -1) 
+                    {
+                        LogMessage($"❌ Instrument {symbol} not found or not loaded, aborting trade", true);
+                        return;
+                    }
+                    else if (barsIndex == -2)
+                    {
+                        LogMessage($"❌ Instrument {symbol} exists but not loaded as data series, aborting trade", true);
+                        LogMessage($"💡 Add {symbol} to a chart or include it in TradableInstruments parameter", true);
+                        return;
+                    }
+
+                    LogMessage($"🟢 LIMIT BUY: {quantity} {symbol} @ {limitPrice}", true);
+                    LogMessage($"🔧 Calling EnterLongLimit with barsIndex: {barsIndex}, quantity: {quantity}, limitPrice: {limitPrice}", true);
+                    
+                    // Execute the limit order
+                    EnterLongLimit(barsIndex, true, quantity, limitPrice, $"DiscordBuyLimit_{symbol}_{DateTime.Now.Ticks}");
+                    
+                    LogMessage($"✅ EnterLongLimit call completed for {quantity} {symbol} @ {limitPrice}", true);
+                }
+                else
+                {
+                    LogMessage($"❌ Invalid BUY LIMIT format. Parts.Length: {parts.Length}. Use: BUY # SYMBOL LIMIT @ ####", true);
+                    LogMessage($"💡 Example: BUY 1 NQ LIMIT @ 15000", true);
+                    if (parts.Length >= 2)
+                    {
+                        LogMessage($"❌ Failed to parse quantity '{parts[1]}' as integer", true);
+                    }
+                    if (parts.Length >= 5)
+                    {
+                        LogMessage($"❌ Failed to parse limit price '{parts[4]}' as double", true);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error in BUY LIMIT command: {ex.Message}", true);
+                LogMessage($"❌ HandleBuyLimitCommand stack trace: {ex.StackTrace}", true);
+            }
+        }
+
+        private void HandleSellLimitCommand(string[] parts)
+        {
+            try
+            {
+                LogMessage($"🔴 HandleSellLimitCommand started with parts: [{string.Join(", ", parts)}]", true);
+                
+                // Format: SELL # SYMBOL LIMIT @ ####
+                if (parts.Length >= 5 && int.TryParse(parts[1], out int quantity) && double.TryParse(parts[4], out double limitPrice))
+                {
+                    string symbol = parts[2];
+                    LogMessage($"🔍 Parsed - Quantity: {quantity}, Symbol: {symbol}, Limit Price: {limitPrice}", true);
+                    
+                    int barsIndex = GetInstrumentIndex(symbol);
+                    LogMessage($"🔍 Instrument index for {symbol}: {barsIndex}", true);
+                    
+                    if (barsIndex == -1) 
+                    {
+                        LogMessage($"❌ Instrument {symbol} not found or not loaded, aborting trade", true);
+                        return;
+                    }
+                    else if (barsIndex == -2)
+                    {
+                        LogMessage($"❌ Instrument {symbol} exists but not loaded as data series, aborting trade", true);
+                        LogMessage($"💡 Add {symbol} to a chart or include it in TradableInstruments parameter", true);
+                        return;
+                    }
+
+                    LogMessage($"🔴 LIMIT SELL: {quantity} {symbol} @ {limitPrice}", true);
+                    LogMessage($"🔧 Calling EnterShortLimit with barsIndex: {barsIndex}, quantity: {quantity}, limitPrice: {limitPrice}", true);
+                    
+                    // Execute the limit order
+                    EnterShortLimit(barsIndex, true, quantity, limitPrice, $"DiscordSellLimit_{symbol}_{DateTime.Now.Ticks}");
+                    
+                    LogMessage($"✅ EnterShortLimit call completed for {quantity} {symbol} @ {limitPrice}", true);
+                }
+                else
+                {
+                    LogMessage($"❌ Invalid SELL LIMIT format. Parts.Length: {parts.Length}. Use: SELL # SYMBOL LIMIT @ ####", true);
+                    LogMessage($"💡 Example: SELL 1 NQ LIMIT @ 15000", true);
+                    if (parts.Length >= 2)
+                    {
+                        LogMessage($"❌ Failed to parse quantity '{parts[1]}' as integer", true);
+                    }
+                    if (parts.Length >= 5)
+                    {
+                        LogMessage($"❌ Failed to parse limit price '{parts[4]}' as double", true);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error in SELL LIMIT command: {ex.Message}", true);
+                LogMessage($"❌ HandleSellLimitCommand stack trace: {ex.StackTrace}", true);
             }
         }
 

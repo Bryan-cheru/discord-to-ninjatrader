@@ -48,12 +48,26 @@ Your Discord-to-NinjaTrader system now supports **DYNAMIC SYMBOL DISCOVERY**!
 
 ### Discord Commands (Examples):
 ```
-BUY 1 NQ        # Trade Nasdaq (if loaded)
-BUY 1 CL        # Trade Crude Oil (if loaded)  
-BUY 1 GC        # Trade Gold (if loaded)
-BUY 1 6E        # Trade Euro (if loaded)
-SELL 2 ES       # Trade S&P 500 (if loaded)
+# Market Orders (immediate execution)
+BUY 1 NQ        # Trade Nasdaq at market price
+BUY 1 CL        # Trade Crude Oil at market price
+BUY 1 GC        # Trade Gold at market price
+BUY 1 6E        # Trade Euro at market price
+SELL 2 ES       # Trade S&P 500 at market price
+
+# Limit Orders (specific price targeting)
+BUY 1 NQ LIMIT @ 15000      # Buy NQ when price hits 15000
+SELL 1 ES LIMIT @ 4600      # Sell ES when price hits 4600
+BUY 1 CL LIMIT @ 75.50      # Buy Oil when price hits $75.50
+SELL 1 GC LIMIT @ 2050      # Sell Gold when price hits $2050
+
+# Stop Limit Orders (advanced)
+BUY 1 NQ STOP LIMIT @ 15100    # Stop limit buy order
+SELL 1 ES STOP LIMIT @ 4500    # Stop limit sell order
+
+# Close Orders (position management)
 CLOSE CL        # Close Oil positions
+CLOSE NQ        # Close Nasdaq positions
 CLOSE POSITION  # Close all positions
 ```
 
