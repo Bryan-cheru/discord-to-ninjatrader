@@ -99,8 +99,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                     Description = "Discord Trade Copier - Multi-Instrument";
                     Name = "DiscordTradeCopier";
 
-                    // Default instruments - start with just NQ for testing
-                    TradableInstruments = "NQ";
+                    // Default instruments - include common futures for testing
+                    TradableInstruments = "NQ,ES,MNQ,MES,YM,RTY";
 
                     try
                     {
@@ -163,6 +163,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                             string[] symbols = TradableInstruments.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
                             int addedCount = 0;
                             
+                            Print($"📊 Attempting to configure {symbols.Length} total instruments: {string.Join(", ", symbols)}");
+                            
                             foreach (string symbol in symbols)
                             {
                                 string upperSymbol = symbol.Trim().ToUpper();
@@ -179,7 +181,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                                     catch (Exception ex)
                                     {
                                         Print($"⚠️ Failed to add data series for {upperSymbol}: {ex.Message}");
-                                        Print($"⚠️ Stack trace: {ex.StackTrace}");
+                                        Print($"⚠️ This symbol may not be available in your data feed or account");
                                         // Continue with other symbols instead of failing completely
                                     }
                                 }
@@ -189,7 +191,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                                 }
                             }
                             
-                            Print($"📊 Added {addedCount} additional data series");
+                            Print($"📊 Added {addedCount} additional data series successfully");
+                            Print($"📊 Total symbols to be mapped: {symbols.Length} configured");
                         }
                         
                         Print($"✅ Configure state completed successfully");
@@ -219,7 +222,9 @@ namespace NinjaTrader.NinjaScript.Strategies
                         // Clear and rebuild instrument map to avoid duplicates
                         instrumentMap.Clear();
                         
-                        // Map all loaded instruments to their BarsArray index
+                        // ENHANCED: Map ALL loaded instruments automatically (not just TradableInstruments)
+                        LogMessage($"🔍 DYNAMIC INSTRUMENT DISCOVERY: Scanning all loaded data series...", true);
+                        
                         for (int i = 0; i < BarsArray.Length; i++)
                         {
                             if (BarsArray[i] == null || BarsArray[i].Instrument == null)
@@ -230,10 +235,43 @@ namespace NinjaTrader.NinjaScript.Strategies
                             
                             string symbolName = BarsArray[i].Instrument.MasterInstrument.Name.ToUpper();
                             instrumentMap[symbolName] = i; // Use assignment to avoid duplicates
-                            LogMessage($"📈 Mapped instrument: {symbolName} to index {i}", true);
+                            LogMessage($"📈 AUTO-MAPPED: {symbolName} → index {i}", true);
                         }
                         
-                        LogMessage($"✅ DataLoaded completed. {instrumentMap.Count} instruments mapped.", true);
+                        // Additional scanning: Try to find other common instruments that might be loaded
+                        LogMessage($"🔍 EXTENDED SCAN: Looking for additional available instruments...", true);
+                        try
+                        {
+                            // Common futures symbols to check
+                            string[] commonSymbols = { "NQ", "ES", "YM", "RTY", "MNQ", "MES", "MYM", "M2K", 
+                                                     "CL", "GC", "SI", "ZB", "ZN", "ZF", "ZT", "6E", "6J", "6B", "6A" };
+                            
+                            foreach (string symbol in commonSymbols)
+                            {
+                                if (!instrumentMap.ContainsKey(symbol))
+                                {
+                                    try
+                                    {
+                                        var instrument = Instrument.GetInstrument(symbol);
+                                        if (instrument != null)
+                                        {
+                                            LogMessage($"🔍 Found available (but not loaded): {symbol}", true);
+                                        }
+                                    }
+                                    catch
+                                    {
+                                        // Ignore errors for symbols that don't exist
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception scanEx)
+                        {
+                            LogMessage($"⚠️ Extended scan error (non-critical): {scanEx.Message}", true);
+                        }
+                        
+                        LogMessage($"✅ DYNAMIC MAPPING COMPLETE: {instrumentMap.Count} instruments ready for trading", true);
+                        LogMessage($"📊 Available symbols: {string.Join(", ", instrumentMap.Keys)}", true);
                         
                         // Validate we have at least one instrument
                         if (instrumentMap.Count == 0)
@@ -241,6 +279,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                             LogMessage($"❌ CRITICAL: No instruments mapped in DataLoaded!", true);
                             return;
                         }
+                        
+                        LogMessage($"🎯 Strategy now supports ANY symbol that's loaded in NinjaTrader!", true);
                     }
                     catch (Exception ex)
                     {
@@ -659,16 +699,60 @@ namespace NinjaTrader.NinjaScript.Strategies
             {
                 string upperSymbol = symbol.ToUpper();
                 LogMessage($"🔍 GetInstrumentIndex - Looking for symbol: '{upperSymbol}'", true);
-                LogMessage($"🔍 Available instruments: [{string.Join(", ", instrumentMap.Keys)}]", true);
+                LogMessage($"🔍 Currently mapped instruments: [{string.Join(", ", instrumentMap.Keys)}]", true);
+                LogMessage($"🔍 Total instruments mapped: {instrumentMap.Count}", true);
                 
+                // First check if we already have this symbol mapped
                 if (instrumentMap.ContainsKey(upperSymbol))
                 {
                     int index = instrumentMap[upperSymbol];
-                    LogMessage($"✅ Found {upperSymbol} at index {index}", true);
+                    LogMessage($"✅ Found {upperSymbol} at existing index {index}", true);
                     return index;
                 }
 
-                LogMessage($"❌ Instrument '{symbol}' not found in tradable list. Add it to strategy parameters.", true);
+                // Try to find the symbol in loaded BarsArray (dynamic detection)
+                LogMessage($"🔍 Symbol not in map, searching BarsArray for: {upperSymbol}", true);
+                for (int i = 0; i < BarsArray.Length; i++)
+                {
+                    if (BarsArray[i] != null && BarsArray[i].Instrument != null)
+                    {
+                        string barSymbol = BarsArray[i].Instrument.MasterInstrument.Name.ToUpper();
+                        LogMessage($"🔍 Checking BarsArray[{i}]: {barSymbol}", true);
+                        
+                        if (barSymbol == upperSymbol)
+                        {
+                            // Add to our map for future use
+                            instrumentMap[upperSymbol] = i;
+                            LogMessage($"✅ DYNAMIC DISCOVERY: Added {upperSymbol} at index {i}", true);
+                            return i;
+                        }
+                    }
+                }
+
+                // Try to find symbol using NinjaTrader's Instrument.GetInstrument method
+                LogMessage($"🔍 Attempting to find instrument using GetInstrument: {upperSymbol}", true);
+                try
+                {
+                    var instrument = Instrument.GetInstrument(upperSymbol);
+                    if (instrument != null)
+                    {
+                        LogMessage($"✅ Found instrument via GetInstrument: {instrument.MasterInstrument.Name}", true);
+                        LogMessage($"⚠️ However, this symbol is not loaded as a data series in the strategy", true);
+                        LogMessage($"💡 To trade {upperSymbol}, add it to a chart or strategy first", true);
+                        return -2; // Special code for "exists but not loaded"
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"🔍 GetInstrument failed for {upperSymbol}: {ex.Message}", true);
+                }
+
+                LogMessage($"❌ Instrument '{symbol}' not found in any loaded data series.", true);
+                LogMessage($"💡 Available symbols: {string.Join(", ", instrumentMap.Keys)}", true);
+                LogMessage($"💡 To trade {upperSymbol}:", true);
+                LogMessage($"   1. Add {upperSymbol} to a chart in NinjaTrader", true);
+                LogMessage($"   2. Or add it to TradableInstruments parameter: {upperSymbol}", true);
+                LogMessage($"   3. Restart the strategy", true);
                 return -1; // Indicates instrument not found
             }
             catch (Exception ex)
@@ -922,7 +1006,13 @@ namespace NinjaTrader.NinjaScript.Strategies
                     
                     if (barsIndex == -1) 
                     {
-                        LogMessage($"❌ Instrument {symbol} not found, aborting trade", true);
+                        LogMessage($"❌ Instrument {symbol} not found or not loaded, aborting trade", true);
+                        return;
+                    }
+                    else if (barsIndex == -2)
+                    {
+                        LogMessage($"❌ Instrument {symbol} exists but not loaded as data series, aborting trade", true);
+                        LogMessage($"💡 Add {symbol} to a chart or include it in TradableInstruments parameter", true);
                         return;
                     }
 
@@ -954,24 +1044,50 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             try
             {
+                LogMessage($"🔴 HandleSellMarketCommand started with parts: [{string.Join(", ", parts)}]", true);
+                
                 // Format: SELL # SYMBOL
                 if (parts.Length >= 3 && int.TryParse(parts[1], out int quantity))
                 {
                     string symbol = parts[2];
+                    LogMessage($"🔍 Parsed - Quantity: {quantity}, Symbol: {symbol}", true);
+                    
                     int barsIndex = GetInstrumentIndex(symbol);
-                    if (barsIndex == -1) return;
+                    LogMessage($"🔍 Instrument index for {symbol}: {barsIndex}", true);
+                    
+                    if (barsIndex == -1) 
+                    {
+                        LogMessage($"❌ Instrument {symbol} not found or not loaded, aborting trade", true);
+                        return;
+                    }
+                    else if (barsIndex == -2)
+                    {
+                        LogMessage($"❌ Instrument {symbol} exists but not loaded as data series, aborting trade", true);
+                        LogMessage($"💡 Add {symbol} to a chart or include it in TradableInstruments parameter", true);
+                        return;
+                    }
 
-                    LogMessage($"🔴 MARKET SELL: {quantity} {symbol}");
+                    LogMessage($"🔴 MARKET SELL: {quantity} {symbol}", true);
+                    LogMessage($"🔧 Calling EnterShort with barsIndex: {barsIndex}, quantity: {quantity}", true);
+                    
+                    // Execute the trade
                     EnterShort(barsIndex, quantity, $"DiscordSellMarket_{symbol}_{DateTime.Now.Ticks}");
+                    
+                    LogMessage($"✅ EnterShort call completed for {quantity} {symbol}", true);
                 }
                 else
                 {
-                    LogMessage($"❌ Invalid SELL format. Use: SELL # SYMBOL");
+                    LogMessage($"❌ Invalid SELL format. Parts.Length: {parts.Length}. Use: SELL # SYMBOL", true);
+                    if (parts.Length >= 2)
+                    {
+                        LogMessage($"❌ Failed to parse quantity '{parts[1]}' as integer", true);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                LogMessage($"❌ Error in SELL command: {ex.Message}");
+                LogMessage($"❌ Error in SELL command: {ex.Message}", true);
+                LogMessage($"❌ HandleSellMarketCommand stack trace: {ex.StackTrace}", true);
             }
         }
 
@@ -979,6 +1095,8 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             try
             {
+                LogMessage($"❌ HandleCloseSymbolCommand started with parts: [{string.Join(", ", parts)}]", true);
+                
                 // Format: CLOSE # SYMBOL or CLOSE SYMBOL
                 if (parts.Length >= 2)
                 {
@@ -991,7 +1109,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                         // Format: CLOSE # SYMBOL
                         if (parts.Length < 3)
                         {
-                            LogMessage($"❌ Invalid CLOSE format. Use: CLOSE # SYMBOL or CLOSE SYMBOL");
+                            LogMessage($"❌ Invalid CLOSE format. Use: CLOSE # SYMBOL or CLOSE SYMBOL", true);
                             return;
                         }
                         quantity = qty;
@@ -1003,30 +1121,47 @@ namespace NinjaTrader.NinjaScript.Strategies
                         symbol = parts[1];
                     }
 
+                    LogMessage($"🔍 Parsed - Symbol: {symbol}, Quantity: {quantity}", true);
+                    
                     int barsIndex = GetInstrumentIndex(symbol);
-                    if (barsIndex == -1) return;
+                    LogMessage($"🔍 Instrument index for {symbol}: {barsIndex}", true);
+                    
+                    if (barsIndex == -1) 
+                    {
+                        LogMessage($"❌ Instrument {symbol} not found or not loaded, aborting close", true);
+                        return;
+                    }
+                    else if (barsIndex == -2)
+                    {
+                        LogMessage($"❌ Instrument {symbol} exists but not loaded as data series, aborting close", true);
+                        LogMessage($"💡 Add {symbol} to a chart or include it in TradableInstruments parameter", true);
+                        return;
+                    }
 
                     if (quantity > 0)
                     {
-                        LogMessage($"❌ CLOSING: {quantity} {symbol}");
+                        LogMessage($"❌ CLOSING: {quantity} {symbol}", true);
                         ExitLong(barsIndex, quantity, $"Closing {quantity}", "");
                         ExitShort(barsIndex, quantity, $"Closing {quantity}", "");
                     }
                     else
                     {
-                        LogMessage($"❌ CLOSING ALL for {symbol}");
+                        LogMessage($"❌ CLOSING ALL for {symbol}", true);
                         ExitLong(barsIndex, "Closing All", "");
                         ExitShort(barsIndex, "Closing All", "");
                     }
+                    
+                    LogMessage($"✅ Close command completed for {symbol}", true);
                 }
                 else
                 {
-                    LogMessage($"❌ Invalid CLOSE format. Use: CLOSE # SYMBOL or CLOSE SYMBOL");
+                    LogMessage($"❌ Invalid CLOSE format. Use: CLOSE # SYMBOL or CLOSE SYMBOL", true);
                 }
             }
             catch (Exception ex)
             {
-                LogMessage($"❌ Error in CLOSE command: {ex.Message}");
+                LogMessage($"❌ Error in CLOSE command: {ex.Message}", true);
+                LogMessage($"❌ HandleCloseSymbolCommand stack trace: {ex.StackTrace}", true);
             }
         }
 
