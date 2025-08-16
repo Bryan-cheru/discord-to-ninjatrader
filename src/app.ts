@@ -11,8 +11,8 @@ class App {
   private nt8Executor: NT8TradeExecutor;
 
   constructor() {
-    this.discordBot = new DiscordBot();
     this.nt8Executor = new NT8TradeExecutor();
+    this.discordBot = new DiscordBot(this.nt8Executor); // Pass the shared executor
   }
 
   public async start(): Promise<void> {

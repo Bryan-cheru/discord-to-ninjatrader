@@ -1,12 +1,13 @@
 import { Client, GatewayIntentBits, Message } from 'discord.js';
 import { logger } from '../utils/logger';
 import { MessageHandler } from './messageHandler';
+import { NT8TradeExecutor } from '../nt8/tradeExecutor';
 
 export class DiscordBot {
   private client: Client;
   private messageHandler: MessageHandler;
 
-  constructor() {
+  constructor(tradeExecutor: NT8TradeExecutor) {
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -15,7 +16,7 @@ export class DiscordBot {
       ]
     });
 
-    this.messageHandler = new MessageHandler();
+    this.messageHandler = new MessageHandler(tradeExecutor); // Pass the shared executor
     this.setupEventHandlers();
   }
 

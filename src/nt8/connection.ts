@@ -125,4 +125,13 @@ export class NT8Connection {
   public isConnectionActive(): boolean {
     return this.isConnected;
   }
+
+  public async closeConnection(): Promise<void> {
+    try {
+      this.disconnect();
+      logger.info('NT8 connection closed');
+    } catch (error) {
+      logger.error('Error closing NT8 connection:', error);
+    }
+  }
 }
