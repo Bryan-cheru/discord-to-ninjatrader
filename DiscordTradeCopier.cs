@@ -37,7 +37,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         #region Properties
         [NinjaScriptProperty]
         [Display(Name = "Tradable Instruments", Order = 0, GroupName = "Connection")]
-        [Description("Comma-separated list of instruments to trade, e.g., NQ,ES,MNQ. The first instrument is the primary.")]
+        [Description("DYNAMIC MODE: Leave empty for automatic discovery. Strategy will discover instruments on-demand when trading commands are received.")]
         public string TradableInstruments { get; set; }
 
         [NinjaScriptProperty]
@@ -96,11 +96,11 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                     Print($"🔧 DiscordTradeCopier initializing (global restart #{globalRestartCount})");
 
-                    Description = "Discord Trade Copier - Multi-Instrument";
+                    Description = "Discord Trade Copier - Dynamic Multi-Instrument";
                     Name = "DiscordTradeCopier";
 
-                    // Default instruments - include common futures for testing
-                    TradableInstruments = "NQ,ES,MNQ,MES,YM,RTY";
+                    // Start with empty - instruments will be discovered dynamically
+                    TradableInstruments = "";
 
                     try
                     {
@@ -157,43 +157,11 @@ namespace NinjaTrader.NinjaScript.Strategies
                         instrumentMap[Instrument.MasterInstrument.Name.ToUpper()] = 0;
                         Print($"📈 Primary instrument: {Instrument.MasterInstrument.Name} at index 0");
 
-                        // Add additional data series for other instruments (simplified)
-                        if (!string.IsNullOrEmpty(TradableInstruments))
-                        {
-                            string[] symbols = TradableInstruments.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
-                            int addedCount = 0;
-                            
-                            Print($"📊 Attempting to configure {symbols.Length} total instruments: {string.Join(", ", symbols)}");
-                            
-                            foreach (string symbol in symbols)
-                            {
-                                string upperSymbol = symbol.Trim().ToUpper();
-                                if (!instrumentMap.ContainsKey(upperSymbol) && upperSymbol != Instrument.MasterInstrument.Name.ToUpper())
-                                {
-                                    try
-                                    {
-                                        Print($"📈 Attempting to add data series for: {upperSymbol}");
-                                        // Try to add data series with error handling
-                                        AddDataSeries(upperSymbol, BarsPeriodType.Minute, 1);
-                                        addedCount++;
-                                        Print($"✅ Successfully added data series for: {upperSymbol}");
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Print($"⚠️ Failed to add data series for {upperSymbol}: {ex.Message}");
-                                        Print($"⚠️ This symbol may not be available in your data feed or account");
-                                        // Continue with other symbols instead of failing completely
-                                    }
-                                }
-                                else if (upperSymbol == Instrument.MasterInstrument.Name.ToUpper())
-                                {
-                                    Print($"📈 {upperSymbol} is the primary instrument (already loaded)");
-                                }
-                            }
-                            
-                            Print($"📊 Added {addedCount} additional data series successfully");
-                            Print($"📊 Total symbols to be mapped: {symbols.Length} configured");
-                        }
+                        // DYNAMIC MODE: Only load the primary instrument during Configure
+                        // Additional instruments will be discovered on-demand when commands are received
+                        Print($"🎯 DYNAMIC MODE: Strategy configured with primary instrument only");
+                        Print($"📊 Primary instrument ready: {Instrument.MasterInstrument.Name}");
+                        Print($"� Additional instruments will be discovered automatically when trading commands are received");
                         
                         Print($"✅ Configure state completed successfully");
                     }
@@ -238,37 +206,8 @@ namespace NinjaTrader.NinjaScript.Strategies
                             LogMessage($"📈 AUTO-MAPPED: {symbolName} → index {i}", true);
                         }
                         
-                        // Additional scanning: Try to find other common instruments that might be loaded
-                        LogMessage($"🔍 EXTENDED SCAN: Looking for additional available instruments...", true);
-                        try
-                        {
-                            // Common futures symbols to check
-                            string[] commonSymbols = { "NQ", "ES", "YM", "RTY", "MNQ", "MES", "MYM", "M2K", 
-                                                     "CL", "GC", "SI", "ZB", "ZN", "ZF", "ZT", "6E", "6J", "6B", "6A" };
-                            
-                            foreach (string symbol in commonSymbols)
-                            {
-                                if (!instrumentMap.ContainsKey(symbol))
-                                {
-                                    try
-                                    {
-                                        var instrument = Instrument.GetInstrument(symbol);
-                                        if (instrument != null)
-                                        {
-                                            LogMessage($"🔍 Found available (but not loaded): {symbol}", true);
-                                        }
-                                    }
-                                    catch
-                                    {
-                                        // Ignore errors for symbols that don't exist
-                                    }
-                                }
-                            }
-                        }
-                        catch (Exception scanEx)
-                        {
-                            LogMessage($"⚠️ Extended scan error (non-critical): {scanEx.Message}", true);
-                        }
+                        // No pre-scanning for instruments - fully dynamic discovery on-demand
+                        LogMessage($"🎯 DYNAMIC MODE: No pre-scanning for instruments - discovery on-demand only", true);
                         
                         LogMessage($"✅ DYNAMIC MAPPING COMPLETE: {instrumentMap.Count} instruments ready for trading", true);
                         LogMessage($"📊 Available symbols: {string.Join(", ", instrumentMap.Keys)}", true);
