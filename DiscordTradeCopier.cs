@@ -30,15 +30,17 @@ namespace NinjaTrader.NinjaScript.Strategies
         private static DateTime globalLastRestartTime = DateTime.MinValue;
         private static bool globalListenerActive = false; // Track if any instance has an active listener
         private static DiscordTradeCopier activeInstance = null; // Singleton pattern
+        private static Dictionary<string, DiscordTradeCopier> instances = new Dictionary<string, DiscordTradeCopier>(); // Track multiple instances
         
         // Instance-specific initialization flag
         private bool isInitialized = false;
+        private string instanceId; // Unique identifier for this instance
 
         #region Properties
         [NinjaScriptProperty]
         [Display(Name = "Tradable Instruments", Order = 0, GroupName = "Connection")]
         [Description("Comma-separated list of instruments to trade, e.g., NQ,ES,MNQ. The first instrument is the primary.")]
-        public string TradableInstruments { get; set; }
+        public string TradableInstruments { get; set; } = "NQ,ES,MNQ,MES,YM,RTY"; // Initialize with default value
 
         [NinjaScriptProperty]
         [Range(1024, 65535)]
@@ -63,18 +65,24 @@ namespace NinjaTrader.NinjaScript.Strategies
                 
                 if (State == State.SetDefaults)
                 {
-                    // Enhanced restart protection with singleton check
-                    if (activeInstance != null && globalListenerActive)
+                    // Create unique instance ID based on chart instrument
+                    instanceId = $"{GetHashCode()}_{DateTime.Now.Ticks}";
+                    
+                    // Check if we already have the maximum number of instances (limit to prevent conflicts)
+                    if (instances.Count >= 10) // Allow up to 10 chart instances
                     {
-                        Print($"⚠️ Active strategy instance already running with listener. Blocking additional instance.");
-                        return; // Prevent this instance from continuing
+                        Print($"⚠️ Maximum number of strategy instances (10) already running. Consider closing unused charts.");
+                        return;
                     }
                     
                     // Always initialize instance variables to prevent null reference exceptions
                     instrumentMap = new Dictionary<string, int>();
                     isInitialized = true;
                     
-                    Print($"🔧 Entering SetDefaults state at {DateTime.Now}");
+                    // Register this instance
+                    instances[instanceId] = this;
+                    
+                    Print($"🔧 Instance {instanceId} entering SetDefaults state at {DateTime.Now}");
                     
                     // Simplified restart protection - only track excessive restarts
                     if (DateTime.Now - globalLastRestartTime < TimeSpan.FromSeconds(60)) // Increased to 60 seconds
@@ -98,9 +106,6 @@ namespace NinjaTrader.NinjaScript.Strategies
 
                     Description = "Discord Trade Copier - Multi-Instrument";
                     Name = "DiscordTradeCopier";
-
-                    // Default instruments - include common futures for testing
-                    TradableInstruments = "NQ,ES,MNQ,MES,YM,RTY";
 
                     try
                     {
@@ -193,6 +198,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                             
                             Print($"📊 Added {addedCount} additional data series successfully");
                             Print($"📊 Total symbols to be mapped: {symbols.Length} configured");
+                        }
+                        else
+                        {
+                            Print($"⚠️ TradableInstruments is null or empty, using only primary instrument: {Instrument.MasterInstrument.Name}");
                         }
                         
                         Print($"✅ Configure state completed successfully");
@@ -321,7 +330,13 @@ namespace NinjaTrader.NinjaScript.Strategies
                         if (instrumentMap.Count == 0)
                         {
                             Print($"❌ CRITICAL: No instruments mapped! Check TradableInstruments parameter.");
-                            Print($"❌ TradableInstruments setting: '{TradableInstruments}'");
+                            Print($"❌ TradableInstruments setting: '{TradableInstruments ?? "NULL"}'");
+                            // Try to set a default if null
+                            if (string.IsNullOrEmpty(TradableInstruments))
+                            {
+                                TradableInstruments = "NQ,ES,MNQ,MES,YM,RTY";
+                                Print($"🔧 Set default TradableInstruments: {TradableInstruments}");
+                            }
                             return;
                         }
                         
@@ -354,17 +369,55 @@ namespace NinjaTrader.NinjaScript.Strategies
                 }
                 else if (State == State.Terminated)
                 {
-                    Print($"🛑 DiscordTradeCopier terminating - cleaning up resources");
+                    Print($"🛑 Instance {instanceId} terminating - cleaning up resources");
                     
                     try
                     {
-                        StopListener();
+                        // Remove this instance from the instances dictionary
+                        if (!string.IsNullOrEmpty(instanceId) && instances.ContainsKey(instanceId))
+                        {
+                            instances.Remove(instanceId);
+                            Print($"🗑️ Removed instance {instanceId} from instances dictionary");
+                        }
                         
-                        // Clear singleton reference if this was the active instance
+                        // If this was the active TCP listener, stop it and transfer to another instance
                         if (activeInstance == this)
                         {
+                            StopListener();
                             activeInstance = null;
-                            Print($"🔄 Active instance cleared for future restarts");
+                            
+                            // Try to transfer TCP listener to another instance
+                            foreach (var kvp in instances)
+                            {
+                                var instance = kvp.Value;
+                                if (instance != null && instance != this && !instance.isListening)
+                                {
+                                    Print($"🔄 Transferring TCP listener to instance {kvp.Key}");
+                                    try
+                                    {
+                                        activeInstance = instance;
+                                        instance.StartListener();
+                                        Print($"✅ TCP listener transferred successfully");
+                                        break;
+                                    }
+                                    catch (Exception transferEx)
+                                    {
+                                        Print($"❌ Failed to transfer listener: {transferEx.Message}");
+                                        activeInstance = null;
+                                    }
+                                }
+                            }
+                            
+                            if (activeInstance == null)
+                            {
+                                Print($"⚠️ No suitable instance found for TCP listener transfer");
+                                globalListenerActive = false;
+                            }
+                        }
+                        else
+                        {
+                            // Just stop this instance's resources
+                            StopListener();
                         }
                         
                         // Clear instrument map
@@ -373,7 +426,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                             instrumentMap.Clear();
                         }
                         
-                        Print($"✅ Strategy cleanup completed");
+                        Print($"✅ Instance {instanceId} cleanup completed");
                     }
                     catch (Exception ex)
                     {
@@ -390,29 +443,30 @@ namespace NinjaTrader.NinjaScript.Strategies
                 }
                 else if (State == State.Realtime)
                 {
-                    Print($"🕐 Strategy entered Realtime state");
+                    Print($"🕐 Instance {instanceId} entered Realtime state");
                     
-                    // Enhanced singleton check - only allow one active instance
-                    if (activeInstance != null && activeInstance != this && globalListenerActive)
+                    // Check if any instance is already running the TCP listener
+                    if (globalListenerActive && activeInstance != null && activeInstance != this)
                     {
-                        Print($"⚠️ Another strategy instance is already active. This instance will remain passive.");
+                        Print($"⚠️ TCP listener already active on another instance. This instance will be passive.");
+                        Print($"📊 This chart can still receive commands routed from the active listener.");
                         return;
                     }
                     
-                    // This might be the state we need to handle!
-                    if (instrumentMap != null && instrumentMap.Count > 0 && !isListening)
+                    // If no listener is active, make this instance the active one
+                    if (!globalListenerActive && instrumentMap != null && instrumentMap.Count > 0)
                     {
-                        Print($"🚀 Attempting to start listener from Realtime state...");
+                        Print($"🚀 No active listener found. Making this instance the TCP handler...");
                         try
                         {
                             // Set this as the active instance before starting listener
                             activeInstance = this;
                             StartListener();
-                            Print($"✅ DiscordTradeCopier started from Realtime state!");
+                            Print($"✅ Instance {instanceId} is now the active TCP listener!");
                         }
                         catch (Exception ex)
                         {
-                            Print($"❌ Error starting listener from Realtime: {ex.Message}");
+                            Print($"❌ Error starting listener: {ex.Message}");
                             activeInstance = null; // Reset if failed to start
                         }
                     }
@@ -590,7 +644,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                             string command = Encoding.UTF8.GetString(buffer, 0, bytesRead).Trim();
                             LogMessage($"📨 Command received: '{command}'", true);
 
-                            ProcessDiscordCommand(command);
+                            RouteCommandToAppropriateInstance(command);
 
                             // Send response back to Discord bot
                             byte[] response = Encoding.UTF8.GetBytes("✅ Command received\n");
@@ -609,6 +663,79 @@ namespace NinjaTrader.NinjaScript.Strategies
                 LogMessage($"❌ Error receiving command: {ex.Message}", true);
                 LogMessage($"❌ PollForCommands stack trace: {ex.StackTrace}", true);
             }
+        }
+
+        private void RouteCommandToAppropriateInstance(string command)
+        {
+            try
+            {
+                // Extract symbol from command to determine which instance should handle it
+                string symbol = ExtractSymbolFromCommand(command);
+                
+                if (string.IsNullOrEmpty(symbol))
+                {
+                    LogMessage($"⚠️ Could not extract symbol from command: {command}", true);
+                    // Process on current instance if we can't determine symbol
+                    ProcessDiscordCommand(command);
+                    return;
+                }
+                
+                // Check if current instance can handle this symbol
+                if (instrumentMap.ContainsKey(symbol.ToUpper()))
+                {
+                    LogMessage($"📈 Current instance can handle {symbol}, processing locally", true);
+                    ProcessDiscordCommand(command);
+                    return;
+                }
+                
+                // Look for another instance that can handle this symbol
+                foreach (var kvp in instances)
+                {
+                    var instance = kvp.Value;
+                    if (instance != null && instance != this && instance.instrumentMap != null && 
+                        instance.instrumentMap.ContainsKey(symbol.ToUpper()))
+                    {
+                        LogMessage($"📈 Routing {symbol} command to instance {kvp.Key}", true);
+                        instance.ProcessDiscordCommand(command);
+                        return;
+                    }
+                }
+                
+                LogMessage($"⚠️ No instance found for symbol {symbol}, processing on active instance", true);
+                ProcessDiscordCommand(command);
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error routing command: {ex.Message}", true);
+                // Fallback to processing on current instance
+                ProcessDiscordCommand(command);
+            }
+        }
+        
+        private string ExtractSymbolFromCommand(string command)
+        {
+            try
+            {
+                string[] parts = command.ToUpper().Split(new char[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                
+                // For most commands, symbol is at index 2: "BUY 1 MES", "SELL 2 NQ LIMIT @ 19000"
+                if (parts.Length >= 3)
+                {
+                    return parts[2];
+                }
+                
+                // For CLOSE commands: "CLOSE MES", "CLOSE POSITION"
+                if (parts.Length >= 2 && parts[0] == "CLOSE" && parts[1] != "POSITION")
+                {
+                    return parts[1];
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"❌ Error extracting symbol: {ex.Message}", true);
+            }
+            
+            return null;
         }
 
         private void ProcessDiscordCommand(string command)

@@ -8,6 +8,10 @@ export class SignalParser {
     buyStopLimit: /^BUY\s+(\d+)\s+([A-Z]{2,4})\s+STOP\s+LIMIT\s+@\s+(\d+(?:\.\d+)?)$/i,
     sellStopLimit: /^SELL\s+(\d+)\s+([A-Z]{2,4})\s+STOP\s+LIMIT\s+@\s+(\d+(?:\.\d+)?)$/i,
     
+    // Pattern: BUY # MES LIMIT @ ####, SELL # MES LIMIT @ #### (regular limit orders)
+    buyLimit: /^BUY\s+(\d+)\s+([A-Z]{2,4})\s+LIMIT\s+@\s+(\d+(?:\.\d+)?)$/i,
+    sellLimit: /^SELL\s+(\d+)\s+([A-Z]{2,4})\s+LIMIT\s+@\s+(\d+(?:\.\d+)?)$/i,
+    
     // Pattern: BUY # MES, SELL # MES (market orders)
     buyMarket: /^BUY\s+(\d+)\s+([A-Z]{2,4})$/i,
     sellMarket: /^SELL\s+(\d+)\s+([A-Z]{2,4})$/i,
@@ -112,6 +116,24 @@ export class SignalParser {
         symbol = match[2];
         price = parseFloat(match[3]);
         orderType = 'STOP_LIMIT';
+        break;
+        
+      case 'buyLimit':
+        // Handle: BUY 2 MES LIMIT @ 4950
+        action = 'BUY';
+        quantity = parseInt(match[1]);
+        symbol = match[2];
+        price = parseFloat(match[3]);
+        orderType = 'LIMIT';
+        break;
+        
+      case 'sellLimit':
+        // Handle: SELL 2 MES LIMIT @ 4950
+        action = 'SELL';
+        quantity = parseInt(match[1]);
+        symbol = match[2];
+        price = parseFloat(match[3]);
+        orderType = 'LIMIT';
         break;
         
       case 'buyMarket':
