@@ -1,0 +1,32 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "discord-to-mt5-tradingview", "discord-to-mt5-tradingview", "{DF1DC9E8-BDFE-BE91-7DE2-9A31C65990BE}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{CF0FF438-2E29-BC89-7E5E-344525405CE8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DiscordTradingBridge", "discord-to-mt5-tradingview\src\ninjatrader\DiscordTradingBridge.csproj", "{C5DD554E-F436-C017-B23A-887BF4D499AA}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C5DD554E-F436-C017-B23A-887BF4D499AA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C5DD554E-F436-C017-B23A-887BF4D499AA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C5DD554E-F436-C017-B23A-887BF4D499AA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C5DD554E-F436-C017-B23A-887BF4D499AA}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{CF0FF438-2E29-BC89-7E5E-344525405CE8} = {DF1DC9E8-BDFE-BE91-7DE2-9A31C65990BE}
+		{C5DD554E-F436-C017-B23A-887BF4D499AA} = {CF0FF438-2E29-BC89-7E5E-344525405CE8}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {2B0EFAC0-211B-4BC7-A586-63E969EA323F}
+	EndGlobalSection
+EndGlobal
